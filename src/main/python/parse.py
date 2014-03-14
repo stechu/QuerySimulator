@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 
+'''
+    parse myria query fragments to Finite State Machines
+'''
+
 from collections import defaultdict
 import json
+from itertools import groupby
+from sets import Set
+from fysom import *
 
 
 # By default, all operators have no children
 children = defaultdict(list)
 # Populate the list for all operators that do have children
-children['CollectProducer'] = ['argChild']
-children['EOSController'] = ['argChild']
-children['IDBInput'] = ['argInitialInput',
-                        'argIterationInput', 'argEosControllerInput']
 children['RightHashJoin'] = ['argChild1', 'argChild2']
 children['RightHashCountingJoin'] = ['argChild1', 'argChild2']
 children['SymmetricHashJoin'] = ['argChild1', 'argChild2']
@@ -34,16 +37,23 @@ children['SinkRoot'] = ['argChild']
 children['DupElim'] = ['argChild']
 children['Rename'] = ['argChild']
 
+root_operators = Set(['SinkRoot', 'DbInsert', 'HyperShuffleProducer',
+                      'ShuffleProducer', 'BroadcastProducer'])
+
 
 def read_json(filename):
     with open(filename, 'r') as f:
         return json.load(f)
 
 
+def pretty_json(obj):
+    return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ':'))
+
+
 def unify_fragments(fragments):
     """Returns a list of operators, adding to each operator a field
     fragment_id, a field id, and converting all the children links to
-    list type."""
+    list type. """
     ret = []
     for (i, fragment) in enumerate(fragments):
         for operator in fragment['operators']:
@@ -52,6 +62,7 @@ def unify_fragments(fragments):
                 if not isinstance(operator[field], list):
                     operator[field] = [operator[field]]
             ret.append(operator)
+    #print pretty_json(ret)
     return ret
 
 
@@ -61,26 +72,6 @@ def operator_get_children(op):
     for x in children[op['opType']]:
         for c in op[x]:
             ret.append(c)
-    return ret
-
-
-def operator_get_out_pipes(op):
-    # By default, all operators have no out pipes
-    pipe_fields = defaultdict(list)
-    # Populate the list for all operators that do have children
-    pipe_fields['CollectProducer'] = ['argOperatorId']
-    pipe_fields['EOSController'] = ['arg_idb_operator_ids']
-    pipe_fields['LocalMultiwayProducer'] = ['arg_operator_ids']
-    pipe_fields['ShuffleProducer'] = ['argOperatorId']
-    pipe_fields['IDBInput'] = ['arg_controller_operator_id']
-    pipe_fields['BroadcastProducer'] = ['argOperatorId']
-    pipe_fields['HyperShuffleProducer'] = ['argOperatorId']
-    ret = []
-    for x in pipe_fields[op['opType']]:
-        if isinstance(op[x], list):
-            ret.extend([str(y) for y in op[x]])
-        else:
-            ret.append(str(op[x]))
     return ret
 
 
@@ -97,46 +88,61 @@ def operator_get_in_pipes(op):
     return [str(op[x]) for x in pipe_fields[op['opType']]]
 
 
-def get_graph(unified_plan):
-    local_edges = []
+# construct fsms for each query fragment
+def get_fsms(unified_plan):
+    # construct in pipes and out pipes
     in_pipes = defaultdict(list)
     for op in unified_plan:
         # Operator id
         op_id = op['opName']
-        # Add child edges
-        local_edges.extend([(x, op_id) for x in operator_get_children(op)])
         # Add pipes
         for producing_op_id in operator_get_in_pipes(op):
             in_pipes[producing_op_id].append(op_id)
-        #for pipe_id in operator_get_out_pipes(op):
-        #    out_pipes[pipe_id].append(op_id)
+
     pipe_edges = []
     for producing_op_id in in_pipes:
         pipe_edges.extend([(producing_op_id, y, "")
                            for y in in_pipes[producing_op_id]])
-    return (unified_plan, local_edges, pipe_edges)
 
+    #  construct fsms
+    fsms = []
 
-def export_dot(nodes, edges, pipe_edges, filename=""):
-    print """digraph MyriaPlan {
-  ratio = 1.3333 ;
-  mincross = 2.0 ;
-  label = "Myria Plan for %s" ;
-  rankdir = "BT" ;
-  ranksep = 0.25 ;
-  node [fontname="Helvetica", fontsize=10, shape=oval,\
-  style=filled, fillcolor=white ] ;
-  edge [fontname="Helvetica", fontsize=9 ] ;
-""" % (filename,)
+    def call_event(parent, child):
+        event = {
+            'name': '{}_call_{}'.format(parent, child),
+            'src': parent,
+            'dst': child
+        }
+        return event
 
+    def return_event(parent, child):
+        event = {
+            'name': '{}_return_{}'.format(child, parent),
+            'src': child,
+            'dst': parent
+        }
+        return event
+    # group operators by fragment id, create fsm per fragment
+    keyfunc = lambda op: op["fragmentId"]
+    sorted(unified_plan, key=keyfunc)
+    for k, f in groupby(unified_plan, keyfunc):
+        events = []
+        init = ''
+        for op in f:
+            op_id = op['opName']
+            events.extend([call_event(op['opName'], x)
+                           for x in operator_get_children(op)])
+            events.extend([return_event(x, op['opName'])
+                           for x in operator_get_children(op)])
+            if op['opType'] in root_operators:
+                init = op_id
+        fsm_arg = {
+            'initial': init,
+            'events': events
+        }
+        fsms.append({
+            'fsm': Fysom(fsm_arg),
+            'fragmentId': k}
+        )
 
-def main(filename):
-    myria_json_plan = read_json(filename)
-    fragments = myria_json_plan['fragments']
-    unified_plan = unify_fragments(fragments)
-    [nodes, edges, pipe_edges] = get_graph(unified_plan)
-    export_dot(nodes, edges, pipe_edges, filename)
-
-
-if __name__ == "__main__":
-    main()
+    return (fsms, pipe_edges)

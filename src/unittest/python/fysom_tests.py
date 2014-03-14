@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 import unittest
+import parse
 from fysom import *
+import os
 
 ''' unit test of optimizer
 '''
@@ -10,39 +12,61 @@ class TestOpimizerFunctions(unittest.TestCase):
 
     def testFSM(self):
 
-        def onpanic(e):
-            print 'panic! ' + e.msg
+        def oncall_join(e):
+            print 'call join.next() ' + e.msg
 
-        def oncalm(e):
-            print 'thanks to ' + e.msg
+        def oncall_gatherR(e):
+            print 'call GatherR.next() ' + e.msg
 
-        def ongreen(e):
-            print 'green'
+        def onreturnR(e):
+            print 'GatherR.next() returns tuples ' + e.msg
 
-        def onyellow(e):
-            print 'yellow'
+        def oncall_gatherS(e):
+            print 'call GatherS.next() ' + e.msg
 
-        def onred(e):
-            print 'red'
+        def onreturnS(e):
+            print 'GatherS.next() returns tuples ' + e.msg
+
+        def oninsert_tuple(e):
+            print 'Join.next() returns tuples ' + e.msg
 
         fsm = Fysom({
-            'initial': 'green',
+            'initial': 'insert',
             'events': [
-                {'name': 'warn',  'src': 'green',  'dst': 'yellow'},
-                {'name': 'panic', 'src': 'yellow', 'dst': 'red'},
-                {'name': 'calm',  'src': 'red',    'dst': 'yellow'},
-                {'name': 'clear', 'src': 'yellow', 'dst': 'green'}
+                {'name': 'call_join',  'src': 'insert',  'dst': 'join'},
+                {'name': 'call_gatherR', 'src': 'join', 'dst': 'gatherR'},
+                {'name': 'returnR',  'src': 'gatherR', 'dst': 'join'},
+                {'name': 'call_gatherS', 'src': 'join', 'dst': 'gatherS'},
+                {'name': 'returnS', 'src': 'gatherS', 'dst': 'join'},
+                {'name': 'insert_tuple', 'src': 'join', 'dst': 'insert'}
             ],
             'callbacks': {
-                'onpanic': onpanic,
-                'oncalm':   oncalm,
-                'ongreen':  ongreen,
-                'onyellow': onyellow,
-                'onred':    onred
+                'oncall_join': oncall_join,
+                'oncall_gatherR':   oncall_gatherR,
+                'onreturnR':  onreturnR,
+                'oncall_gatherS': oncall_gatherS,
+                'onreturnS':    onreturnS,
+                'oninsert_tuple':  oninsert_tuple
             }
         })
 
-        fsm.startup()
-        fsm.warn(msg='killer bees')
-        fsm.calm(msg='sedatives in the honey pots')
+        fsm.call_join('bob', msg='pull join')
+        fsm.call_gatherR(msg='pull gather R')
+        fsm.returnR(msg='return')
 
+    def testBuildFSMs(self):
+        myria_json_plan = parse.read_json(
+            os.getcwd()+'/src/unittest/python/hash_join.json')
+        fragments = myria_json_plan['fragments']
+        unified_plan = parse.unify_fragments(fragments)
+        (fsms, pipes) = parse.get_fsms(unified_plan)
+
+        #test query fragment 0
+        fsm_sr = fsms[0]['fsm']
+        self.assertEqual(fsm_sr.current, 'shuffle_r')
+        fsm_sr.shuffle_r_call_scan_r()
+        self.assertEqual(fsm_sr.current, 'scan_r')
+
+        #test query fragment 2
+        fsm_join = fsms[2]['fsm']
+        self.assertEqual(fsm_join.current, 'insert')
