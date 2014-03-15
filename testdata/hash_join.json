@@ -48,7 +48,7 @@
             "operators":[
                 {
                     "argOperatorId":"shuffle_r",
-                    "opName":"GatherR",
+                    "opName":"gather_r",
                     "opType":"ShuffleConsumer"
                 },
                 {
@@ -57,7 +57,7 @@
                     "opType":"ShuffleConsumer"
                 },
                 {
-                    "argChild1":"GatherR",
+                    "argChild1":"gather_r",
                     "argChild2":"gather_s",
                     "argColumns1":[
                         1

@@ -7,7 +7,6 @@
 from collections import defaultdict
 import json
 from itertools import groupby
-from sets import Set
 from fysom import *
 
 
@@ -37,8 +36,11 @@ children['SinkRoot'] = ['argChild']
 children['DupElim'] = ['argChild']
 children['Rename'] = ['argChild']
 
-root_operators = Set(['SinkRoot', 'DbInsert', 'HyperShuffleProducer',
+root_operators = set(['SinkRoot', 'DbInsert', 'HyperShuffleProducer',
                       'ShuffleProducer', 'BroadcastProducer'])
+sender_operators = set(['HyperShuffleProducer',
+                        'ShuffleProducer', 'BroadcastProducer'])
+receiver_operators = set(['ShuffleConsumer', 'CollectConsumer'])
 
 
 def read_json(filename):
@@ -132,7 +134,7 @@ def get_fsms(unified_plan):
             op_id = op['opName']
             events.extend([call_event(op['opName'], x)
                            for x in operator_get_children(op)])
-            events.extend([return_event(x, op['opName'])
+            events.extend([return_event(op['opName'], x)
                            for x in operator_get_children(op)])
             if op['opType'] in root_operators:
                 init = op_id
