@@ -9,7 +9,7 @@ import json
 from itertools import groupby
 from fysom import *
 
-
+#TODO: refactor this
 # By default, all operators have no children
 children = defaultdict(list)
 # Populate the list for all operators that do have children
@@ -43,108 +43,117 @@ sender_operators = set(['HyperShuffleProducer',
 receiver_operators = set(['ShuffleConsumer', 'CollectConsumer'])
 
 
-def read_json(filename):
-    with open(filename, 'r') as f:
-        return json.load(f)
-
-
+# for debug output
 def pretty_json(obj):
     return json.dumps(obj, sort_keys=True, indent=4, separators=(',', ':'))
 
 
-def unify_fragments(fragments):
-    """Returns a list of operators, adding to each operator a field
-    fragment_id, a field id, and converting all the children links to
-    list type. """
-    ret = []
-    for (i, fragment) in enumerate(fragments):
-        for operator in fragment['operators']:
-            operator['fragmentId'] = i
-            for field in children[operator['opType']]:
-                if not isinstance(operator[field], list):
-                    operator[field] = [operator[field]]
-            ret.append(operator)
-    #print pretty_json(ret)
-    return ret
+# query plan class
+class QueryPlan(object):
 
+    def __init__(self, plan):
+        plan = QueryPlan.read_json(plan)
+        fragments = plan['fragments']
+        self.unified_plan = QueryPlan.unify_fragments(fragments)
 
-def operator_get_children(op):
-    # Return the names of all child operators of this operator
-    ret = []
-    for x in children[op['opType']]:
-        for c in op[x]:
-            ret.append(c)
-    return ret
+    @staticmethod
+    def read_json(filename):
+        with open(filename, 'r') as f:
+            return json.load(f)
 
+    @staticmethod
+    def unify_fragments(fragments):
+        """Returns a list of operators, adding to each operator a field
+        fragment_id, a field id, and converting all the children links to
+        list type. """
+        ret = []
+        for (i, fragment) in enumerate(fragments):
+            for operator in fragment['operators']:
+                operator['fragmentId'] = i
+                for field in children[operator['opType']]:
+                    if not isinstance(operator[field], list):
+                        operator[field] = [operator[field]]
+                ret.append(operator)
+        return ret
 
-def operator_get_in_pipes(op):
-    # By default, all operators have no in pipes
-    pipe_fields = defaultdict(list)
-    # Populate the list for all operators that do have children
-    pipe_fields['CollectConsumer'] = ['argOperatorId']
-    pipe_fields['Consumer'] = ['argOperatorId']
-    pipe_fields['LocalMultiwayConsumer'] = ['argOperatorId']
-    pipe_fields['ShuffleConsumer'] = ['argOperatorId']
-    pipe_fields['BroadcastConsumer'] = ['argOperatorId']
-    pipe_fields['HyperShuffleConsumer'] = ['argOperatorId']
-    return [str(op[x]) for x in pipe_fields[op['opType']]]
+    @staticmethod
+    def operator_get_children(op):
+        # Return the names of all child operators of this operator
+        ret = []
+        for x in children[op['opType']]:
+            for c in op[x]:
+                ret.append(c)
+        return ret
 
+    @staticmethod
+    def operator_get_in_pipes(op):
+        # By default, all operators have no in pipes
+        pipe_fields = defaultdict(list)
+        # Populate the list for all operators that do have children
+        pipe_fields['CollectConsumer'] = ['argOperatorId']
+        pipe_fields['Consumer'] = ['argOperatorId']
+        pipe_fields['LocalMultiwayConsumer'] = ['argOperatorId']
+        pipe_fields['ShuffleConsumer'] = ['argOperatorId']
+        pipe_fields['BroadcastConsumer'] = ['argOperatorId']
+        pipe_fields['HyperShuffleConsumer'] = ['argOperatorId']
+        return [str(op[x]) for x in pipe_fields[op['opType']]]
 
-# construct fsms for each query fragment
-def get_fsms(unified_plan):
-    # construct in pipes and out pipes
-    in_pipes = defaultdict(list)
-    for op in unified_plan:
-        # Operator id
-        op_id = op['opName']
-        # Add pipes
-        for producing_op_id in operator_get_in_pipes(op):
-            in_pipes[producing_op_id].append(op_id)
-
-    pipe_edges = []
-    for producing_op_id in in_pipes:
-        pipe_edges.extend([(producing_op_id, y, "")
-                           for y in in_pipes[producing_op_id]])
-
-    #  construct fsms
-    fsms = []
-
-    def call_event(parent, child):
-        event = {
-            'name': '{}_call_{}'.format(parent, child),
-            'src': parent,
-            'dst': child
-        }
-        return event
-
-    def return_event(parent, child):
-        event = {
-            'name': '{}_return_{}'.format(child, parent),
-            'src': child,
-            'dst': parent
-        }
-        return event
-    # group operators by fragment id, create fsm per fragment
-    keyfunc = lambda op: op["fragmentId"]
-    sorted(unified_plan, key=keyfunc)
-    for k, f in groupby(unified_plan, keyfunc):
-        events = []
-        init = ''
-        for op in f:
+    # construct fsms for each query fragment
+    def get_fsms(self):
+        # construct in pipes and out pipes
+        in_pipes = defaultdict(list)
+        unified_plan = self.unified_plan
+        for op in unified_plan:
+            # Operator id
             op_id = op['opName']
-            events.extend([call_event(op['opName'], x)
-                           for x in operator_get_children(op)])
-            events.extend([return_event(op['opName'], x)
-                           for x in operator_get_children(op)])
-            if op['opType'] in root_operators:
-                init = op_id
-        fsm_arg = {
-            'initial': init,
-            'events': events
-        }
-        fsms.append({
-            'fsm': Fysom(fsm_arg),
-            'fragmentId': k}
-        )
+            # Add pipes
+            for producing_op_id in QueryPlan.operator_get_in_pipes(op):
+                in_pipes[producing_op_id].append(op_id)
 
-    return (fsms, pipe_edges)
+        pipe_edges = []
+        for producing_op_id in in_pipes:
+            pipe_edges.extend([(producing_op_id, y, "")
+                               for y in in_pipes[producing_op_id]])
+
+        #  construct fsms
+        fsms = []
+
+        def call_event(parent, child):
+            event = {
+                'name': '{}_call_{}'.format(parent, child),
+                'src': parent,
+                'dst': child
+            }
+            return event
+
+        def return_event(parent, child):
+            event = {
+                'name': '{}_return_{}'.format(child, parent),
+                'src': child,
+                'dst': parent
+            }
+            return event
+        # group operators by fragment id, create fsm per fragment
+        keyfunc = lambda op: op["fragmentId"]
+        sorted(unified_plan, key=keyfunc)
+        for k, f in groupby(unified_plan, keyfunc):
+            events = []
+            init = ''
+            for op in f:
+                op_id = op['opName']
+                events.extend([call_event(op['opName'], x)
+                               for x in QueryPlan.operator_get_children(op)])
+                events.extend([return_event(op['opName'], x)
+                               for x in QueryPlan.operator_get_children(op)])
+                if op['opType'] in root_operators:
+                    init = op_id
+            fsm_arg = {
+                'initial': init,
+                'events': events
+            }
+            fsms.append({
+                'fsm': Fysom(fsm_arg),
+                'fragmentId': k}
+            )
+
+        return (fsms, pipe_edges)

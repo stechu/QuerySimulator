@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import unittest
-import parse
+from parse import *
 import os
 
 ''' unit test of optimizer
@@ -10,11 +10,8 @@ import os
 class TestOpimizerFunctions(unittest.TestCase):
 
     def testBuildFSMs(self):
-        myria_json_plan = parse.read_json(
-            os.getcwd()+'/testdata/hash_join.json')
-        fragments = myria_json_plan['fragments']
-        unified_plan = parse.unify_fragments(fragments)
-        (fsms, pipes) = parse.get_fsms(unified_plan)
+        query_plan = QueryPlan(os.getcwd()+'/testdata/hash_join.json')
+        (fsms, pipes) = query_plan.get_fsms()
 
         #test query fragment 0
         fsm_sr = fsms[0]['fsm']
